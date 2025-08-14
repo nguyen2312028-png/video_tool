@@ -1,48 +1,27 @@
 import os
 import sys
 import cv2
-import numpy as np
-import random
-import tempfile
 import threading
+import numpy as np
+import tempfile
+import random
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
-# ==== CONFIG ====
-INPUT_FOLDER = "input_videos"
+# === CONFIG ===
 OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
-OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
-
-ZOOM_X, ZOOM_Y = 1.15, 1.40
-OVERLAY_OPACITY = 0.05
 FINAL_RES = (720, 1280)
-
-WATERMARK_TEXT = "NguenChang"
-WATERMARK_FONT = cv2.FONT_HERSHEY_SIMPLEX
-WATERMARK_SCALE = 0.6
-WATERMARK_COLOR = (255, 255, 255)
-WATERMARK_THICKNESS = 1
-WATERMARK_ALPHA = 0.3
-
-LINE_THICKNESS = 2
+OVERLAY_OPACITY = 0.05
+ZOOM_X, ZOOM_Y = 1.15, 1.40
+FPS = 60
 VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
-FPS = 60
 
-if getattr(sys, 'frozen', False):
-    os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
+video_path = None
 
-for folder in [INPUT_FOLDER, OVERLAY_FOLDER, OUTPUT_FOLDER]:
-    os.makedirs(folder, exist_ok=True)
-
-run_id = len(os.listdir(OUTPUT_FOLDER)) + 1
-current_output_path = os.path.join(OUTPUT_FOLDER, str(run_id))
-os.makedirs(current_output_path, exist_ok=True)
-
-# ---- Các hàm xử lý video ----
 def apply_hdr_and_color(frame):
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
@@ -61,53 +40,27 @@ def create_blurred_bg(clip):
 
 def add_white_line(frame):
     y_center = frame.shape[0] // 2
-    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), LINE_THICKNESS)
+    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 2)
     return frame
-
-def add_watermark(frame):
-    h, w, _ = frame.shape
-    text_size = cv2.getTextSize(WATERMARK_TEXT, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_THICKNESS)[0]
-    positions = [
-        (10, text_size[1] + 10),
-        (w - text_size[0] - 10, text_size[1] + 10),
-        (10, h - 10),
-        (w - text_size[0] - 10, h - 10)
-    ]
-    pos = random.choice(positions)
-    overlay = frame.copy()
-    cv2.putText(overlay, WATERMARK_TEXT, pos, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_COLOR, WATERMARK_THICKNESS)
-    return cv2.addWeighted(overlay, WATERMARK_ALPHA, frame, 1 - WATERMARK_ALPHA, 0)
-
-def add_echo_and_pitch(audio_path):
-    sound = AudioSegment.from_file(audio_path)
-    sound = sound.overlay(sound - 6, position=80)
-    sound = sound._spawn(sound.raw_data, overrides={
-        "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
-    }).set_frame_rate(sound.frame_rate)
-    temp_path = tempfile.mktemp(suffix=".wav")
-    sound.export(temp_path, format="wav")
-    return temp_path
 
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
     aspect = w / h
 
-    if aspect >= 1.3:  # Video 16:9
-        scaled_clip = clip.resize(width=w * 1.15, height=h * 1.40)
-        crop_width = h * 0.97  # Crop 3% instead of 5%
-        x_center = scaled_clip.w / 2
-        cropped = scaled_clip.crop(width=crop_width, height=scaled_clip.h, x_center=x_center, y_center=scaled_clip.h / 2)
-    else:  # Video 9:16
-        cropped = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
+    if aspect >= 1.3:
+        scaled = clip.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
+        main_clip = scaled
+    else:
+        main_clip = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w/2, y_center=h/2)
 
-    main_clip = cropped.resize(height=FINAL_RES[1])
-    bg_clip = create_blurred_bg(cropped)
+    main_clip = main_clip.resize(height=FINAL_RES[1])
+    bg_clip = create_blurred_bg(main_clip)
 
     overlay_clips = []
-    for file in OVERLAY_FILES:
-        ov_path = os.path.join(OVERLAY_FOLDER, file)
-        if os.path.exists(ov_path):
+    for file in os.listdir(OVERLAY_FOLDER):
+        if file.endswith(".mp4"):
+            ov_path = os.path.join(OVERLAY_FOLDER, file)
             ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
             if ov.duration < clip.duration:
                 repeat = int(clip.duration / ov.duration) + 1
@@ -118,72 +71,66 @@ def process_video(input_path, output_path):
 
     main_clip = main_clip.fl_image(apply_hdr_and_color)
     main_clip = main_clip.fl_image(add_white_line)
-    main_clip = main_clip.fl_image(add_watermark)
 
-    final = CompositeVideoClip([
-        bg_clip.resize(FINAL_RES),
-        main_clip.set_position("center")
-    ] + overlay_clips, size=FINAL_RES)
+    final = CompositeVideoClip(
+        [bg_clip.resize(FINAL_RES), main_clip.set_position("center")] + overlay_clips,
+        size=FINAL_RES
+    )
 
-    speed = random.uniform(0.90, 1.10)
-    final = final.fx(vfx.speedx, speed)
+    final = final.fx(vfx.speedx, random.uniform(0.90, 1.10))
 
     if final.audio:
         temp_audio_path = tempfile.mktemp(suffix=".wav")
         final.audio.write_audiofile(temp_audio_path, fps=44100)
-        processed_audio_path = add_echo_and_pitch(temp_audio_path)
-        audio_clip = AudioFileClip(processed_audio_path).set_duration(final.duration)
-        final = final.set_audio(audio_clip)
+        sound = AudioSegment.from_file(temp_audio_path)
+        sound = sound.overlay(sound - 6, position=80)
+        sound = sound._spawn(sound.raw_data, overrides={
+            "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
+        }).set_frame_rate(sound.frame_rate)
+        processed_audio_path = tempfile.mktemp(suffix=".wav")
+        sound.export(processed_audio_path, format="wav")
+        final = final.set_audio(AudioFileClip(processed_audio_path).set_duration(final.duration))
 
-    temp_out = tempfile.mktemp(suffix=".mp4")
-    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    out_path = os.path.join(OUTPUT_FOLDER, os.path.basename(input_path))
+    final.write_videofile(out_path, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
-    metadata_flags = (
-        f'-metadata title="Processed by NguenChang" '
-        f'-metadata author="NguenChang" '
-        f'-metadata comment="Edited on iPhone 12 Pro Max using {random_software}" '
-        f'-metadata location="USA" '
-    )
-    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{output_path}" -y')
+# ==== GUI ====
+def select_video():
+    global video_path
+    file = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv")])
+    if file:
+        video_path = file
+        status_var.set(f"Đã chọn: {os.path.basename(file)}")
 
-def run_processing():
+def start_processing():
+    if not video_path:
+        messagebox.showwarning("Chưa chọn video", "Vui lòng chọn video trước.")
+        return
+
+    status_var.set("Đang xử lý...")
+    threading.Thread(target=process_and_notify, daemon=True).start()
+
+def process_and_notify():
     try:
-        videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
-        if not videos:
-            messagebox.showinfo("Thông báo", "Không tìm thấy video trong thư mục input_videos")
-            return
-
-        for i, vid in enumerate(videos):
-            in_path = os.path.join(INPUT_FOLDER, vid)
-            out_path = os.path.join(current_output_path, f"video_{i+1}.mp4")
-            status_var.set(f"Đang xử lý: {vid}")
-            process_video(in_path, out_path)
-
-        messagebox.showinfo("Hoàn thành", f"✅ Xử lý xong! Video nằm ở: {current_output_path}")
+        process_video(video_path, OUTPUT_FOLDER)
+        status_var.set("✅ Xử lý xong! Xem thư mục output.")
     except Exception as e:
         messagebox.showerror("Lỗi", str(e))
+        status_var.set("❌ Lỗi xảy ra.")
 
-def start_thread():
-    threading.Thread(target=run_processing, daemon=True).start()  # Khởi động thread mới để xử lý video
-
-# ==== GIAO DIỆN GUI ====
+# ==== TKINTER ====
 root = tk.Tk()
 root.title("Video Tool - NguenChang")
-root.geometry("400x200")
+root.geometry("420x200")
 root.resizable(False, False)
 
 status_var = tk.StringVar()
 status_var.set("Sẵn sàng.")
 
-label = tk.Label(root, text="Tool xử lý video dạng Reels/TikTok", font=("Arial", 12))
-label.pack(pady=10)
-
-# Button Bắt đầu xử lý
-button = tk.Button(root, text="Bắt đầu xử lý", font=("Arial", 12), command=start_thread)
-button.pack(pady=10)
-
-status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
-status.pack(pady=5)
+tk.Label(root, text="Tool xử lý video dạng Reels/TikTok", font=("Arial", 12)).pack(pady=10)
+tk.Button(root, text="Chọn video", font=("Arial", 12), command=select_video).pack(pady=5)
+tk.Button(root, text="Bắt đầu xử lý", font=("Arial", 12), command=start_processing).pack(pady=5)
+tk.Label(root, textvariable=status_var, font=("Arial", 10)).pack(pady=5)
 
 root.mainloop()
