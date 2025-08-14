@@ -5,6 +5,7 @@ import numpy as np
 import random
 import tempfile
 import multiprocessing
+from datetime import datetime, timedelta
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
@@ -86,6 +87,22 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
+def generate_random_metadata():
+    encoders = ["CapCut v3.7", "Adobe Premiere Pro 24.2.1", "VN Video Editor", "Final Cut Pro X"]
+    systems = ["Windows 10", "Windows 11", "macOS Ventura"]
+    encoder = random.choice(encoders)
+    software = random.choice(systems)
+    timestamp = datetime.utcnow() - timedelta(days=random.randint(0, 60), minutes=random.randint(0, 1440))
+    return {
+        "title": "My short video",
+        "author": "NguenChang",
+        "comment": f"Edited with {encoder} on {software}",
+        "description": "Short clip for social media",
+        "encoder": encoder,
+        "software": software,
+        "creation_time": timestamp.isoformat()
+    }
+
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
@@ -136,7 +153,19 @@ def process_video(input_path, output_path):
     temp_out = tempfile.mktemp(suffix=".mp4")
     final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 -metadata author="NguenChang" -c:v copy -c:a copy "{output_path}" -y')
+    meta = generate_random_metadata()
+    ffmpeg_cmd = (
+        f'ffmpeg -i "{temp_out}" -map_metadata -1 '
+        f'-metadata title="{meta["title"]}" '
+        f'-metadata author="{meta["author"]}" '
+        f'-metadata comment="{meta["comment"]}" '
+        f'-metadata description="{meta["description"]}" '
+        f'-metadata encoder="{meta["encoder"]}" '
+        f'-metadata software="{meta["software"]}" '
+        f'-metadata creation_time="{meta["creation_time"]}" '
+        f'-c:v copy -c:a copy "{output_path}" -y'
+    )
+    os.system(ffmpeg_cmd)
 
 def main():
     videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
