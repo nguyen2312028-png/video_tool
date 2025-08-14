@@ -8,6 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip, TextClip
+from moviepy.audio.fx.all import audio_loop
 from pydub import AudioSegment
 
 # ==== CONFIG ====
@@ -139,19 +140,26 @@ def process_video(input_path, output_path):
     speed = random.uniform(0.90, 1.10)
     final = final.fx(vfx.speedx, speed)
 
+    # --- Vá lỗi âm thanh ---
     if final.audio:
         temp_audio_path = tempfile.mktemp(suffix=".wav")
         final.audio.write_audiofile(temp_audio_path, fps=44100)
         processed_audio_path = add_echo_and_pitch(temp_audio_path)
         audio_clip = AudioFileClip(processed_audio_path)
+
         duration = final.duration
-        audio_clip = audio_clip.subclip(0, min(audio_clip.duration, duration)).set_duration(duration)
+        if audio_clip.duration < duration:
+            audio_clip = audio_loop(audio_clip, duration=duration)
+        else:
+            audio_clip = audio_clip.subclip(0, duration)
+
         final = final.set_audio(audio_clip)
 
+    # === Xuất file và thêm metadata giả lập ===
     temp_out = tempfile.mktemp(suffix=".mp4")
     final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
+    random_software = random.choice(["CapCut", "iMovie", "iPhone Video Editor", "VN Video Editor"])
     metadata_flags = (
         f'-metadata title="Processed by NguenChang" '
         f'-metadata author="NguenChang" '
@@ -161,6 +169,8 @@ def process_video(input_path, output_path):
 
     final_out_path = os.path.join(output_path, "final_output.mp4")
     os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
+
+    # Cắt thành đoạn ngắn
     save_segments(VideoFileClip(final_out_path), output_path)
 
 def run_processing():
