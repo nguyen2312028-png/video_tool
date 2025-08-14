@@ -8,10 +8,9 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip, TextClip
-from moviepy.audio.fx.all import audio_loop
 from pydub import AudioSegment
 
-# ==== CONFIG ====
+# ==== CONFIG ==== 
 OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
 OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
@@ -24,7 +23,7 @@ WATERMARK_SCALE = 0.6
 WATERMARK_COLOR = (255, 255, 255)
 WATERMARK_THICKNESS = 1
 WATERMARK_ALPHA = 0.3
-VIDEO_CODEC = "libx264"  # Updated to use H.264
+VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 FPS = 60
 
@@ -45,11 +44,6 @@ def apply_hdr_and_color(frame):
     frame = np.clip(((frame / 255.0) ** gamma) * contrast * 255, 0, 255).astype(np.uint8)
     return frame
 
-def create_blurred_bg(clip):
-    return clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y).fl_image(
-        lambda img: cv2.GaussianBlur(img, (25, 25), 0)
-    )
-
 def add_white_line(frame):
     y_center = frame.shape[0] // 2
     cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 3)
@@ -68,6 +62,11 @@ def add_watermark(frame):
     overlay = frame.copy()
     cv2.putText(overlay, WATERMARK_TEXT, pos, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_COLOR, WATERMARK_THICKNESS)
     return cv2.addWeighted(overlay, WATERMARK_ALPHA, frame, 1 - WATERMARK_ALPHA, 0)
+
+def create_blurred_bg(clip):
+    return clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y).fl_image(
+        lambda img: cv2.GaussianBlur(img, (25, 25), 0)
+    )
 
 def add_echo_and_pitch(audio_path):
     sound = AudioSegment.from_file(audio_path)
@@ -93,7 +92,7 @@ def save_segments(final_clip, output_path):
         subclip = CompositeVideoClip([subclip, text])
 
         temp_output = os.path.join(output_path, f"segment_{ep_index}.mp4")
-        subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k", preset="ultrafast")
+        subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
         segment_start = segment_end
         ep_index += 1
 
@@ -103,18 +102,14 @@ def process_video(input_path, output_path):
     aspect = w / h
 
     if aspect >= 1.3:
-        resized = clip.resize(height=FINAL_RES[1])
-        w, h = resized.size
-        x_center = w / 2
-        y_center = h / 2
-        crop_width = w * 0.87
-        crop_height = h * 0.87
-        scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=x_center, y_center=y_center)
+        main_clip = clip.resize(width=FINAL_RES[0])
+        bg_clip = clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y)
+        bg_clip = bg_clip.fl_image(lambda img: cv2.GaussianBlur(img, (25, 25), 0))
     else:
-        scaled_clip = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
-
-    main_clip = scaled_clip.resize(height=FINAL_RES[1])
-    bg_clip = create_blurred_bg(scaled_clip)
+        cropped = clip.crop(width=w * 0.95, height=h * 0.95, x_center=w / 2, y_center=h / 2)
+        main_clip = cropped.resize(height=FINAL_RES[1])
+        bg_clip = cropped.resize(width=cropped.w * ZOOM_X, height=cropped.h * ZOOM_Y)
+        bg_clip = bg_clip.fl_image(lambda img: cv2.GaussianBlur(img, (25, 25), 0))
 
     overlay_clips = []
     for file in OVERLAY_FILES:
@@ -145,19 +140,14 @@ def process_video(input_path, output_path):
         final.audio.write_audiofile(temp_audio_path, fps=44100)
         processed_audio_path = add_echo_and_pitch(temp_audio_path)
         audio_clip = AudioFileClip(processed_audio_path)
-
         duration = final.duration
-        if audio_clip.duration < duration:
-            audio_clip = audio_loop(audio_clip, duration=duration)
-        else:
-            audio_clip = audio_clip.subclip(0, duration)
-
+        audio_clip = audio_clip.subclip(0, min(audio_clip.duration, duration)).set_duration(duration)
         final = final.set_audio(audio_clip)
 
     temp_out = tempfile.mktemp(suffix=".mp4")
-    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k", preset="ultrafast")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    random_software = random.choice(["CapCut", "iMovie", "iPhone Video Editor", "VN Video Editor"])
+    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
     metadata_flags = (
         f'-metadata title="Processed by NguenChang" '
         f'-metadata author="NguenChang" '
@@ -167,7 +157,6 @@ def process_video(input_path, output_path):
 
     final_out_path = os.path.join(output_path, "final_output.mp4")
     os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
-
     save_segments(VideoFileClip(final_out_path), output_path)
 
 def run_processing():
