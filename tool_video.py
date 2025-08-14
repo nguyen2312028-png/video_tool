@@ -5,7 +5,6 @@ import numpy as np
 import random
 import tempfile
 import multiprocessing
-from datetime import datetime, timedelta
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
@@ -87,22 +86,6 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
-def generate_random_metadata():
-    encoders = ["CapCut v3.7", "Adobe Premiere Pro 24.2.1", "VN Video Editor", "Final Cut Pro X"]
-    systems = ["Windows 10", "Windows 11", "macOS Ventura"]
-    encoder = random.choice(encoders)
-    software = random.choice(systems)
-    timestamp = datetime.utcnow() - timedelta(days=random.randint(0, 60), minutes=random.randint(0, 1440))
-    return {
-        "title": "My short video",
-        "author": "NguenChang",
-        "comment": f"Edited with {encoder} on {software}",
-        "description": "Short clip for social media",
-        "encoder": encoder,
-        "software": software,
-        "creation_time": timestamp.isoformat()
-    }
-
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
@@ -153,25 +136,19 @@ def process_video(input_path, output_path):
     temp_out = tempfile.mktemp(suffix=".mp4")
     final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    meta = generate_random_metadata()
-    ffmpeg_cmd = (
-        f'ffmpeg -i "{temp_out}" -map_metadata -1 '
-        f'-metadata title="{meta["title"]}" '
-        f'-metadata author="{meta["author"]}" '
-        f'-metadata comment="{meta["comment"]}" '
-        f'-metadata description="{meta["description"]}" '
-        f'-metadata encoder="{meta["encoder"]}" '
-        f'-metadata software="{meta["software"]}" '
-        f'-metadata creation_time="{meta["creation_time"]}" '
-        f'-c:v copy -c:a copy "{output_path}" -y'
+    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
+    metadata_flags = (
+        f'-metadata title="Processed by NguenChang" '
+        f'-metadata author="NguenChang" '
+        f'-metadata comment="Edited on iPhone 12 Pro Max using {random_software}" '
+        f'-metadata location="USA" '
     )
-    os.system(ffmpeg_cmd)
+    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{output_path}" -y')
 
 def main():
     videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
     args = [(os.path.join(INPUT_FOLDER, vid), os.path.join(current_output_path, f"video_{i+1}.mp4")) for i, vid in enumerate(videos)]
-    num_processes = min(len(args), 10)
-    with multiprocessing.Pool(processes=num_processes) as pool:
+    with multiprocessing.Pool(processes=2) as pool:
         pool.starmap(process_video, args)
 
     print(f"\n✅ Completed! Videos saved in: {current_output_path}")
