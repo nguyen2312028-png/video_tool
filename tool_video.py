@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 import random
 import tempfile
-import multiprocessing
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
@@ -147,10 +146,10 @@ def process_video(input_path, output_path):
 
 def main():
     videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
-    args = [(os.path.join(INPUT_FOLDER, vid), os.path.join(current_output_path, f"video_{i+1}.mp4")) for i, vid in enumerate(videos)]
-    with multiprocessing.Pool(processes=2) as pool:
-        pool.starmap(process_video, args)
-
+    for i, vid in enumerate(videos):
+        in_path = os.path.join(INPUT_FOLDER, vid)
+        out_path = os.path.join(current_output_path, f"video_{i+1}.mp4")
+        process_video(in_path, out_path)
     print(f"\n✅ Completed! Videos saved in: {current_output_path}")
 
 if __name__ == "__main__":
