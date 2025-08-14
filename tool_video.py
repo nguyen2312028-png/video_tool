@@ -81,7 +81,7 @@ def add_watermark(frame):
 
 def add_echo_and_pitch(audio_path):
     sound = AudioSegment.from_file(audio_path)
-    sound = sound.overlay(sound - 6, delay=80)
+    sound = sound.overlay(sound - 6, position=80)
     sound = sound._spawn(sound.raw_data, overrides={
         "frame_rate": int(sound.frame_rate * random.uniform(0.98, 1.02))
     }).set_frame_rate(sound.frame_rate)
