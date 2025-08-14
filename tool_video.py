@@ -10,7 +10,7 @@ from tkinter import messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
-# ==== CONFIG ==== 
+# ==== CONFIG ====
 INPUT_FOLDER = "input_videos"
 OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
@@ -43,7 +43,6 @@ current_output_path = os.path.join(OUTPUT_FOLDER, str(run_id))
 os.makedirs(current_output_path, exist_ok=True)
 
 # ---- Các hàm xử lý video ----
-
 def apply_hdr_and_color(frame):
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
