@@ -196,3 +196,201 @@ status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
 status.pack(pady=5)
 
 root.mainloop()
+import os
+import sys
+import cv2
+import numpy as np
+import random
+import tempfile
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip, TextClip
+from pydub import AudioSegment
+
+# ==== CONFIG ====
+OVERLAY_FOLDER = "overlays"
+OUTPUT_FOLDER = "output"
+OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
+ZOOM_X, ZOOM_Y = 1.15, 1.40
+OVERLAY_OPACITY = 0.05
+FINAL_RES = (720, 1280)
+WATERMARK_TEXT = "NguenChang"
+WATERMARK_FONT = cv2.FONT_HERSHEY_SIMPLEX
+WATERMARK_SCALE = 0.6
+WATERMARK_COLOR = (255, 255, 255)
+WATERMARK_THICKNESS = 1
+WATERMARK_ALPHA = 0.3
+VIDEO_CODEC = "libx265"
+AUDIO_CODEC = "aac"
+FPS = 60
+
+if getattr(sys, 'frozen', False):
+    os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
+
+for folder in [OVERLAY_FOLDER, OUTPUT_FOLDER]:
+    os.makedirs(folder, exist_ok=True)
+
+def apply_hdr_and_color(frame):
+    lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    l = cv2.equalizeHist(l)
+    lab = cv2.merge((l, a, b))
+    frame = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    gamma = random.uniform(0.95, 1.05)
+    contrast = random.uniform(0.95, 1.05)
+    frame = np.clip(((frame / 255.0) ** gamma) * contrast * 255, 0, 255).astype(np.uint8)
+    return frame
+
+def create_blurred_bg(clip):
+    return clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y).fl_image(
+        lambda img: cv2.GaussianBlur(img, (25, 25), 0)
+    )
+
+def add_white_line(frame):
+    y_center = frame.shape[0] // 2
+    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 1)
+    return frame
+
+def add_watermark(frame):
+    h, w, _ = frame.shape
+    text_size = cv2.getTextSize(WATERMARK_TEXT, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_THICKNESS)[0]
+    positions = [
+        (10, text_size[1] + 10),
+        (w - text_size[0] - 10, text_size[1] + 10),
+        (10, h - 10),
+        (w - text_size[0] - 10, h - 10)
+    ]
+    pos = random.choice(positions)
+    overlay = frame.copy()
+    cv2.putText(overlay, WATERMARK_TEXT, pos, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_COLOR, WATERMARK_THICKNESS)
+    return cv2.addWeighted(overlay, WATERMARK_ALPHA, frame, 1 - WATERMARK_ALPHA, 0)
+
+def add_echo_and_pitch(audio_path):
+    sound = AudioSegment.from_file(audio_path)
+    echo = sound - 6
+    sound = sound.overlay(echo, position=80)
+    sound = sound._spawn(sound.raw_data, overrides={
+        "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
+    }).set_frame_rate(sound.frame_rate)
+    temp_path = tempfile.mktemp(suffix=".wav")
+    sound.export(temp_path, format="wav")
+    return temp_path
+
+def save_segments(final_clip, output_path):
+    segment_start = 0
+    ep_index = 1
+    while segment_start < final_clip.duration:
+        segment_end = segment_start + random.uniform(60, 75)
+        segment_end = min(segment_end, final_clip.duration)
+        subclip = final_clip.subclip(segment_start, segment_end)
+
+        text = TextClip(f"Ep{ep_index}", fontsize=30, color='white')
+        text = text.set_position((10, 10)).set_duration(subclip.duration)
+        subclip = CompositeVideoClip([subclip, text])
+
+        temp_output = os.path.join(output_path, f"segment_{ep_index}.mp4")
+        subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+        segment_start = segment_end
+        ep_index += 1
+
+def process_video(input_path, output_path):
+    clip = VideoFileClip(input_path)
+    w, h = clip.size
+    aspect = w / h
+
+    if aspect >= 1.3:
+        scaled_clip = clip.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
+        crop_width = h * 0.5625
+        x_center = scaled_clip.w / 2
+        cropped = scaled_clip.crop(width=crop_width, height=scaled_clip.h, x_center=x_center, y_center=scaled_clip.h / 2)
+    else:
+        cropped = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
+
+    main_clip = cropped.resize(height=FINAL_RES[1])
+    bg_clip = create_blurred_bg(cropped)
+
+    overlay_clips = []
+    for file in OVERLAY_FILES:
+        ov_path = os.path.join(OVERLAY_FOLDER, file)
+        if os.path.exists(ov_path):
+            ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
+            if ov.duration < clip.duration:
+                repeat = int(clip.duration / ov.duration) + 1
+                ov = CompositeVideoClip([ov] * repeat).set_duration(clip.duration)
+            else:
+                ov = ov.subclip(0, clip.duration)
+            overlay_clips.append(ov)
+
+    main_clip = main_clip.fl_image(apply_hdr_and_color)
+    main_clip = main_clip.fl_image(add_white_line)
+    main_clip = main_clip.fl_image(add_watermark)
+
+    final = CompositeVideoClip([
+        bg_clip.resize(FINAL_RES),
+        main_clip.set_position("center")
+    ] + overlay_clips, size=FINAL_RES)
+
+    speed = random.uniform(0.90, 1.10)
+    final = final.fx(vfx.speedx, speed)
+
+    if final.audio:
+        temp_audio_path = tempfile.mktemp(suffix=".wav")
+        final.audio.write_audiofile(temp_audio_path, fps=44100)
+        processed_audio_path = add_echo_and_pitch(temp_audio_path)
+        audio_clip = AudioFileClip(processed_audio_path)
+        audio_clip = audio_clip.subclip(0, min(audio_clip.duration, final.duration))
+        final = final.set_audio(audio_clip)
+
+    temp_out = tempfile.mktemp(suffix=".mp4")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+
+    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
+    metadata_flags = (
+        f'-metadata title="Processed by NguenChang" '
+        f'-metadata author="NguenChang" '
+        f'-metadata comment="Edited on iPhone 12 Pro Max using {random_software}" '
+        f'-metadata location="USA" '
+    )
+
+    final_out_path = os.path.join(output_path, "final_output.mp4")
+    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
+    save_segments(VideoFileClip(final_out_path), output_path)
+
+def run_processing():
+    filepaths = filedialog.askopenfilenames(title="Chọn video để xử lý", filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv")])
+    if not filepaths:
+        messagebox.showinfo("Thông báo", "Bạn chưa chọn video nào!")
+        return
+
+    for i, in_path in enumerate(filepaths):
+        run_id = len(os.listdir(OUTPUT_FOLDER)) + 1
+        output_dir = os.path.join(OUTPUT_FOLDER, f"run_{run_id}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        def process():
+            status_var.set(f"Đang xử lý: {os.path.basename(in_path)}")
+            process_video(in_path, output_dir)
+            status_var.set("Sẵn sàng.")
+
+        threading.Thread(target=process, daemon=True).start()
+
+# ==== GUI ====
+root = tk.Tk()
+root.title("Video Tool - NguenChang")
+root.geometry("400x200")
+root.resizable(False, False)
+
+status_var = tk.StringVar()
+status_var.set("Sẵn sàng.")
+
+label = tk.Label(root, text="Tool xử lý video Reels/TikTok", font=("Arial", 12))
+label.pack(pady=10)
+
+button = tk.Button(root, text="Chọn & Bắt đầu xử lý", font=("Arial", 12), command=run_processing)
+button.pack(pady=10)
+
+status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
+status.pack(pady=5)
+
+root.mainloop()
