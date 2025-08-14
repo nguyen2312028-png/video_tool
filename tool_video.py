@@ -1,12 +1,13 @@
+import threading
 import os
 import sys
 import cv2
 import numpy as np
 import random
 import tempfile
-import tkinter as tk
-from tkinter import messagebox
 from tkinter import filedialog
+from tkinter import messagebox
+import tkinter as tk
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
@@ -32,6 +33,7 @@ VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 FPS = 60
 
+# ==== FIX PATH FFMPEG CHO .EXE ====
 if getattr(sys, 'frozen', False):
     os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
 
@@ -137,7 +139,7 @@ def process_video(input_path, output_path):
         final = final.set_audio(audio_clip)
 
     temp_out = tempfile.mktemp(suffix=".mp4")
-    final.write_videofile(temp_out, fps=FPS, codec="libx265", audio_codec="aac", bitrate="8000k")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
     random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
     metadata_flags = (
@@ -148,32 +150,20 @@ def process_video(input_path, output_path):
     )
     os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{output_path}" -y')
 
-def run_processing(selected_video):
-    try:
-        if not selected_video:
-            messagebox.showinfo("Thông báo", "Không có video được chọn!")
-            return
+# ==== THREADING ==== 
+def start_thread():
+    threading.Thread(target=run_processing).start()
 
-        status_var.set(f"Đang xử lý: {selected_video}")
-        out_path = os.path.join(current_output_path, "processed_video.mp4")
-        process_video(selected_video, out_path)
-        messagebox.showinfo("Hoàn thành", f"✅ Xử lý xong! Video nằm ở: {current_output_path}")
-    except Exception as e:
-        messagebox.showerror("Lỗi", str(e))
-
-def start_thread(selected_video):
-    threading.Thread(target=run_processing, args=(selected_video,)).start()
-
-def open_file_dialog():
-    selected_video = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4;*.mov;*.avi;*.mkv")])
-    if selected_video:
-        start_thread(selected_video)
-
-# ==== GIAO DIỆN GUI ====
+# ==== GUI ====
 root = tk.Tk()
 root.title("Video Tool - NguenChang")
 root.geometry("400x200")
 root.resizable(False, False)
+
+def open_file_dialog():
+    file_path = filedialog.askopenfilename(initialdir=INPUT_FOLDER, title="Chọn video", filetypes=[("MP4 files", "*.mp4")])
+    if file_path:
+        status_var.set(f"Chọn video: {file_path}")
 
 status_var = tk.StringVar()
 status_var.set("Sẵn sàng.")
@@ -181,8 +171,8 @@ status_var.set("Sẵn sàng.")
 label = tk.Label(root, text="Tool xử lý video dạng Reels/TikTok", font=("Arial", 12))
 label.pack(pady=10)
 
-open_button = tk.Button(root, text="Chọn video", font=("Arial", 12), command=open_file_dialog)
-open_button.pack(pady=10)
+button = tk.Button(root, text="Chọn video", font=("Arial", 12), command=open_file_dialog)
+button.pack(pady=10)
 
 status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
 status.pack(pady=5)
