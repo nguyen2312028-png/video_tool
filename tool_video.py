@@ -140,7 +140,8 @@ def process_video(input_path, output_path):
         temp_audio_path = tempfile.mktemp(suffix=".wav")
         final.audio.write_audiofile(temp_audio_path, fps=44100)
         processed_audio_path = add_echo_and_pitch(temp_audio_path)
-        audio_clip = AudioFileClip(processed_audio_path).set_duration(final.duration)
+        audio_clip = AudioFileClip(processed_audio_path)
+        audio_clip = audio_clip.subclip(0, min(audio_clip.duration, final.duration))
         final = final.set_audio(audio_clip)
 
     temp_out = tempfile.mktemp(suffix=".mp4")
