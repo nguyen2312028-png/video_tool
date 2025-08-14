@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip, TextClip
 from pydub import AudioSegment
 
-# ==== CONFIG ==== 
+# ==== CONFIG ====
 OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
 OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
@@ -44,6 +44,11 @@ def apply_hdr_and_color(frame):
     frame = np.clip(((frame / 255.0) ** gamma) * contrast * 255, 0, 255).astype(np.uint8)
     return frame
 
+def create_blurred_bg(clip):
+    return clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y).fl_image(
+        lambda img: cv2.GaussianBlur(img, (25, 25), 0)
+    )
+
 def add_white_line(frame):
     y_center = frame.shape[0] // 2
     cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 3)
@@ -62,11 +67,6 @@ def add_watermark(frame):
     overlay = frame.copy()
     cv2.putText(overlay, WATERMARK_TEXT, pos, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_COLOR, WATERMARK_THICKNESS)
     return cv2.addWeighted(overlay, WATERMARK_ALPHA, frame, 1 - WATERMARK_ALPHA, 0)
-
-def create_blurred_bg(clip):
-    return clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y).fl_image(
-        lambda img: cv2.GaussianBlur(img, (25, 25), 0)
-    )
 
 def add_echo_and_pitch(audio_path):
     sound = AudioSegment.from_file(audio_path)
@@ -102,14 +102,20 @@ def process_video(input_path, output_path):
     aspect = w / h
 
     if aspect >= 1.3:
-        main_clip = clip.resize(width=FINAL_RES[0])
-        bg_clip = clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y)
-        bg_clip = bg_clip.fl_image(lambda img: cv2.GaussianBlur(img, (25, 25), 0))
+        resized = clip.resize(height=FINAL_RES[1])
+        w, h = resized.size
+        x_center = w / 2
+        y_center = h / 2
+        crop_width = w * 0.87
+        crop_height = h * 0.87
+        scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=x_center, y_center=y_center)
+        # Scale foreground 1.15x, 1.40x
+        main_clip = scaled_clip.resize(width=scaled_clip.w * ZOOM_X, height=scaled_clip.h * ZOOM_Y)
     else:
-        cropped = clip.crop(width=w * 0.95, height=h * 0.95, x_center=w / 2, y_center=h / 2)
-        main_clip = cropped.resize(height=FINAL_RES[1])
-        bg_clip = cropped.resize(width=cropped.w * ZOOM_X, height=cropped.h * ZOOM_Y)
-        bg_clip = bg_clip.fl_image(lambda img: cv2.GaussianBlur(img, (25, 25), 0))
+        scaled_clip = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
+        main_clip = scaled_clip
+
+    bg_clip = create_blurred_bg(scaled_clip)
 
     overlay_clips = []
     for file in OVERLAY_FILES:
