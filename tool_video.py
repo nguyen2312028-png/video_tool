@@ -86,6 +86,11 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
+def clean_metadata(output_path):
+    clean_path = output_path.replace(".mp4", "_clean.mp4")
+    os.system(f'ffmpeg -i "{output_path}" -map_metadata -1 -metadata title="." -metadata artist="." -metadata encoder="TikTokPro" -metadata comment="Final Export" -c copy "{clean_path}"')
+    os.replace(clean_path, output_path)
+
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
@@ -118,7 +123,7 @@ def process_video(input_path, output_path):
     main_clip = main_clip.fl_image(add_white_line)
     main_clip = main_clip.fl_image(add_watermark)
 
-    speed_factor = random.uniform(0.90, 1.10)
+    speed_factor = random.uniform(0.9, 1.1)
     final = CompositeVideoClip([
         bg_clip.resize(FINAL_RES),
         main_clip.set_position("center")
@@ -134,6 +139,7 @@ def process_video(input_path, output_path):
         final = final.set_audio(audio_clip)
 
     final.write_videofile(output_path, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+    clean_metadata(output_path)
 
 def main():
     videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
