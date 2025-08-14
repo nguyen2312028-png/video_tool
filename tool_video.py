@@ -13,11 +13,10 @@ OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
 OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
 
-ZOOM_X, ZOOM_Y = 1.15, 1.40
-FPS_DROP = 5
-SPEED_FACTOR = 1.10
+ZOOM_X, ZOOM_Y = 1.15, 1.40  # Tỷ lệ scale nền với video gốc ngang
+CROP_PERCENT = 0.05
 OVERLAY_OPACITY = 0.05
-FINAL_RES = (1280, 720)
+FINAL_RES = (720, 1280)  # Tỉ lệ 9:16
 
 WATERMARK_TEXT = "NguenChang"
 WATERMARK_FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -30,12 +29,9 @@ LINE_THICKNESS = 2
 VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 
-# ==== FIX PATH FFMPEG CHO .EXE ====
 if getattr(sys, 'frozen', False):
-    # Đang chạy từ .exe
     os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
 
-# ==== CREATE FOLDER ====
 for folder in [INPUT_FOLDER, OVERLAY_FOLDER, OUTPUT_FOLDER]:
     os.makedirs(folder, exist_ok=True)
 
@@ -43,7 +39,6 @@ run_id = len(os.listdir(OUTPUT_FOLDER)) + 1
 current_output_path = os.path.join(OUTPUT_FOLDER, str(run_id))
 os.makedirs(current_output_path, exist_ok=True)
 
-# ==== EFFECTS ====
 def apply_hdr_and_color(frame):
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
@@ -89,17 +84,25 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
-# ==== PROCESS ====
+def loop_or_trim_overlay(clip, duration):
+    if clip.duration > duration:
+        return clip.subclip(0, duration)
+    elif clip.duration < duration:
+        loops = int(duration // clip.duration) + 1
+        return concatenate_videoclips([clip] * loops).subclip(0, duration)
+    return clip
+
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
     aspect = w / h
 
-    if aspect >= 1.3:
+    if aspect >= 1.3:  # Landscape → scale nhỏ lại cho vừa khung 9:16
+        scaled = clip.resize(width=clip.w * ZOOM_X, height=clip.h * ZOOM_Y)
         main_clip = clip.resize(height=FINAL_RES[1])
-        bg_clip = create_blurred_bg(clip)
-    else:
-        cropped = clip.crop(width=w * 0.9, height=h * 0.9, x_center=w/2, y_center=h/2)
+        bg_clip = create_blurred_bg(scaled)
+    else:  # Portrait → crop nhẹ và làm nền
+        cropped = clip.crop(width=w * (1 - CROP_PERCENT), height=h * (1 - CROP_PERCENT), x_center=w/2, y_center=h/2)
         main_clip = cropped.resize(height=FINAL_RES[1])
         bg_clip = create_blurred_bg(cropped)
 
@@ -108,6 +111,7 @@ def process_video(input_path, output_path):
         ov_path = os.path.join(OVERLAY_FOLDER, file)
         if os.path.exists(ov_path):
             ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
+            ov = loop_or_trim_overlay(ov, clip.duration)
             overlay_clips.append(ov)
 
     main_clip = main_clip.fl_image(apply_hdr_and_color)
@@ -116,19 +120,17 @@ def process_video(input_path, output_path):
 
     final = CompositeVideoClip([bg_clip.resize(FINAL_RES), main_clip.set_position("center")] + overlay_clips, size=FINAL_RES)
 
-    if final.fps > FPS_DROP:
-        final = final.set_fps(final.fps - FPS_DROP)
-    final = final.fx(vfx.speedx, SPEED_FACTOR)
+    speed_factor = random.uniform(0.95, 1.12)
+    final = final.fx(vfx.speedx, speed_factor)
 
     if final.audio:
         temp_audio_path = tempfile.mktemp(suffix=".wav")
         final.audio.write_audiofile(temp_audio_path, fps=44100)
         processed_audio_path = add_echo_and_pitch(temp_audio_path)
-        final = final.set_audio(AudioFileClip(processed_audio_path))
+        final = final.set_audio(AudioFileClip(processed_audio_path).set_duration(final.duration))
 
-    final.write_videofile(output_path, fps=30, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="5000k")
+    final.write_videofile(output_path, fps=60, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-# ==== RUN ====
 videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
 for i, vid in enumerate(videos, start=1):
     in_path = os.path.join(INPUT_FOLDER, vid)
