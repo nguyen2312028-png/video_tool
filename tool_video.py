@@ -86,11 +86,6 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
-def clean_metadata(output_path):
-    clean_path = output_path.replace(".mp4", "_clean.mp4")
-    os.system(f'ffmpeg -i "{output_path}" -map_metadata -1 -metadata title="." -metadata artist="." -metadata encoder="TikTokPro" -metadata comment="Final Export" -c copy "{clean_path}"')
-    os.replace(clean_path, output_path)
-
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
@@ -123,13 +118,13 @@ def process_video(input_path, output_path):
     main_clip = main_clip.fl_image(add_white_line)
     main_clip = main_clip.fl_image(add_watermark)
 
-    speed_factor = random.uniform(0.9, 1.1)
     final = CompositeVideoClip([
         bg_clip.resize(FINAL_RES),
         main_clip.set_position("center")
     ] + overlay_clips, size=FINAL_RES)
 
-    final = final.fx(vfx.speedx, speed_factor)
+    speed = random.uniform(0.90, 1.10)
+    final = final.fx(vfx.speedx, speed)
 
     if final.audio:
         temp_audio_path = tempfile.mktemp(suffix=".wav")
@@ -138,13 +133,16 @@ def process_video(input_path, output_path):
         audio_clip = AudioFileClip(processed_audio_path).set_duration(final.duration)
         final = final.set_audio(audio_clip)
 
-    final.write_videofile(output_path, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
-    clean_metadata(output_path)
+    temp_out = tempfile.mktemp(suffix=".mp4")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+
+    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 -metadata author="NguenChang" -c:v copy -c:a copy "{output_path}" -y')
 
 def main():
     videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
     args = [(os.path.join(INPUT_FOLDER, vid), os.path.join(current_output_path, f"video_{i+1}.mp4")) for i, vid in enumerate(videos)]
-    with multiprocessing.Pool(processes=32) as pool:
+    num_processes = min(len(args), 10)
+    with multiprocessing.Pool(processes=num_processes) as pool:
         pool.starmap(process_video, args)
 
     print(f"\n✅ Completed! Videos saved in: {current_output_path}")
