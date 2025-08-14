@@ -1,17 +1,16 @@
-import threading
 import os
 import sys
 import cv2
 import numpy as np
 import random
 import tempfile
-from tkinter import filedialog
-from tkinter import messagebox
+import threading
 import tkinter as tk
+from tkinter import messagebox
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
 
-# ==== CONFIG ====
+# ==== CONFIG ==== 
 INPUT_FOLDER = "input_videos"
 OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
@@ -33,17 +32,17 @@ VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 FPS = 60
 
-# ==== FIX PATH FFMPEG CHO .EXE ====
 if getattr(sys, 'frozen', False):
     os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
 
-# ==== CREATE FOLDER ====
 for folder in [INPUT_FOLDER, OVERLAY_FOLDER, OUTPUT_FOLDER]:
     os.makedirs(folder, exist_ok=True)
 
 run_id = len(os.listdir(OUTPUT_FOLDER)) + 1
 current_output_path = os.path.join(OUTPUT_FOLDER, str(run_id))
 os.makedirs(current_output_path, exist_ok=True)
+
+# ---- Các hàm xử lý video ----
 
 def apply_hdr_and_color(frame):
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
@@ -63,7 +62,7 @@ def create_blurred_bg(clip):
 
 def add_white_line(frame):
     y_center = frame.shape[0] // 2
-    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 1)
+    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), LINE_THICKNESS)
     return frame
 
 def add_watermark(frame):
@@ -82,8 +81,7 @@ def add_watermark(frame):
 
 def add_echo_and_pitch(audio_path):
     sound = AudioSegment.from_file(audio_path)
-    echo = sound - 6
-    sound = sound.overlay(echo, position=80)
+    sound = sound.overlay(sound - 6, position=80)
     sound = sound._spawn(sound.raw_data, overrides={
         "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
     }).set_frame_rate(sound.frame_rate)
@@ -96,13 +94,13 @@ def process_video(input_path, output_path):
     w, h = clip.size
     aspect = w / h
 
-    if aspect >= 1.3:
+    if aspect >= 1.3:  # Video 16:9
         scaled_clip = clip.resize(width=w * 1.15, height=h * 1.40)
-        crop_width = h * 0.5625
+        crop_width = h * 0.97  # Crop 3% instead of 5%
         x_center = scaled_clip.w / 2
         cropped = scaled_clip.crop(width=crop_width, height=scaled_clip.h, x_center=x_center, y_center=scaled_clip.h / 2)
-    else:
-        cropped = clip.crop(width=w * 0.95, height=h * 0.95, x_center=w / 2, y_center=h / 2)
+    else:  # Video 9:16
+        cropped = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
 
     main_clip = cropped.resize(height=FINAL_RES[1])
     bg_clip = create_blurred_bg(cropped)
@@ -150,20 +148,31 @@ def process_video(input_path, output_path):
     )
     os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{output_path}" -y')
 
-# ==== THREADING ==== 
-def start_thread():
-    threading.Thread(target=run_processing).start()
+def run_processing():
+    try:
+        videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
+        if not videos:
+            messagebox.showinfo("Thông báo", "Không tìm thấy video trong thư mục input_videos")
+            return
 
-# ==== GUI ====
+        for i, vid in enumerate(videos):
+            in_path = os.path.join(INPUT_FOLDER, vid)
+            out_path = os.path.join(current_output_path, f"video_{i+1}.mp4")
+            status_var.set(f"Đang xử lý: {vid}")
+            process_video(in_path, out_path)
+
+        messagebox.showinfo("Hoàn thành", f"✅ Xử lý xong! Video nằm ở: {current_output_path}")
+    except Exception as e:
+        messagebox.showerror("Lỗi", str(e))
+
+def start_thread():
+    threading.Thread(target=run_processing, daemon=True).start()  # Khởi động thread mới để xử lý video
+
+# ==== GIAO DIỆN GUI ====
 root = tk.Tk()
 root.title("Video Tool - NguenChang")
 root.geometry("400x200")
 root.resizable(False, False)
-
-def open_file_dialog():
-    file_path = filedialog.askopenfilename(initialdir=INPUT_FOLDER, title="Chọn video", filetypes=[("MP4 files", "*.mp4")])
-    if file_path:
-        status_var.set(f"Chọn video: {file_path}")
 
 status_var = tk.StringVar()
 status_var.set("Sẵn sàng.")
@@ -171,7 +180,8 @@ status_var.set("Sẵn sàng.")
 label = tk.Label(root, text="Tool xử lý video dạng Reels/TikTok", font=("Arial", 12))
 label.pack(pady=10)
 
-button = tk.Button(root, text="Chọn video", font=("Arial", 12), command=open_file_dialog)
+# Button Bắt đầu xử lý
+button = tk.Button(root, text="Bắt đầu xử lý", font=("Arial", 12), command=start_thread)
 button.pack(pady=10)
 
 status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
