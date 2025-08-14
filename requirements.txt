@@ -1,0 +1,7 @@
+pyinstaller
+moviepy==1.0.3
+pydub
+numpy
+opencv-python
+imageio
+imageio-ffmpeg

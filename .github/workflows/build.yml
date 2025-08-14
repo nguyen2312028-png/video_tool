@@ -1,0 +1,40 @@
+name: Build EXE (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if exist requirements.txt pip install -r requirements.txt
+          pip install pyinstaller imageio-ffmpeg
+
+      - name: Build EXE
+        run: |
+          pyinstaller ^
+            --onefile ^
+            --name tool_video ^
+            --clean ^
+            --noconfirm ^
+            --add-data "overlays;overlays" ^
+            --collect-all moviepy ^
+            --collect-all imageio_ffmpeg ^
+            --add-binary "ffmpeg.exe;." ^
+            tool_video.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool_video-win
+          path: dist/tool_video.exe
+          if-no-files-found: error
