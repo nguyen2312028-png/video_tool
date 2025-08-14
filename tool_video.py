@@ -1,11 +1,13 @@
 import os
-import sys
 import cv2
 import numpy as np
 import random
 import tempfile
+import threading
 from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, AudioFileClip
 from pydub import AudioSegment
+from tkinter import messagebox, filedialog
+import tkinter as tk
 
 # ==== CONFIG ====
 INPUT_FOLDER = "input_videos"
@@ -13,9 +15,9 @@ OVERLAY_FOLDER = "overlays"
 OUTPUT_FOLDER = "output"
 OVERLAY_FILES = ["line_sang.mp4", "line_trang.mp4"]
 
-ZOOM_X, ZOOM_Y = 1.15, 1.40  # Nền phóng to
+ZOOM_X, ZOOM_Y = 1.15, 1.40
 OVERLAY_OPACITY = 0.05
-FINAL_RES = (720, 1280)  # 9:16
+FINAL_RES = (720, 1280)
 
 WATERMARK_TEXT = "NguenChang"
 WATERMARK_FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -29,15 +31,14 @@ VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 FPS = 60
 
-if getattr(sys, 'frozen', False):
-    os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
+if not os.path.exists(INPUT_FOLDER):
+    os.makedirs(INPUT_FOLDER)
 
-for folder in [INPUT_FOLDER, OVERLAY_FOLDER, OUTPUT_FOLDER]:
-    os.makedirs(folder, exist_ok=True)
+if not os.path.exists(OVERLAY_FOLDER):
+    os.makedirs(OVERLAY_FOLDER)
 
-run_id = len(os.listdir(OUTPUT_FOLDER)) + 1
-current_output_path = os.path.join(OUTPUT_FOLDER, str(run_id))
-os.makedirs(current_output_path, exist_ok=True)
+if not os.path.exists(OUTPUT_FOLDER):
+    os.makedirs(OUTPUT_FOLDER)
 
 def apply_hdr_and_color(frame):
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
@@ -57,7 +58,7 @@ def create_blurred_bg(clip):
 
 def add_white_line(frame):
     y_center = frame.shape[0] // 2
-    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), 1)
+    cv2.line(frame, (0, y_center), (frame.shape[1], y_center), (255, 255, 255), LINE_THICKNESS)
     return frame
 
 def add_watermark(frame):
@@ -85,72 +86,118 @@ def add_echo_and_pitch(audio_path):
     sound.export(temp_path, format="wav")
     return temp_path
 
-def process_video(input_path, output_path):
+# ==== PART 1 - Edit Video ====
+def edit_video(input_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
     aspect = w / h
 
+    # Xử lý video gốc dạng 16:9 và 9:16
     if aspect >= 1.3:
-        scaled_clip = clip.resize(width=w * 1.15, height=h * 1.40)
+        clip = clip.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
         crop_width = h * 0.5625
-        x_center = scaled_clip.w / 2
-        cropped = scaled_clip.crop(width=crop_width, height=scaled_clip.h, x_center=x_center, y_center=scaled_clip.h / 2)
+        x_center = clip.w / 2
+        clip = clip.crop(width=crop_width, height=clip.h, x_center=x_center, y_center=clip.h / 2)
     else:
-        cropped = clip.crop(width=w * 0.95, height=h * 0.95, x_center=w / 2, y_center=h / 2)
+        clip = clip.crop(width=w * 0.95, height=h * 0.95, x_center=w / 2, y_center=h / 2)
 
-    main_clip = cropped.resize(height=FINAL_RES[1])
-    bg_clip = create_blurred_bg(cropped)
+    # Thêm nền mờ
+    bg_clip = create_blurred_bg(clip)
 
+    # Thêm watermark, đường chỉ trắng
+    clip = clip.fl_image(add_white_line)
+    clip = clip.fl_image(add_watermark)
+
+    # Thêm overlay
     overlay_clips = []
     for file in OVERLAY_FILES:
         ov_path = os.path.join(OVERLAY_FOLDER, file)
         if os.path.exists(ov_path):
-            ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
-            if ov.duration < clip.duration:
-                repeat = int(clip.duration / ov.duration) + 1
-                ov = CompositeVideoClip([ov] * repeat).set_duration(clip.duration)
-            else:
-                ov = ov.subclip(0, clip.duration)
+            ov = VideoFileClip(ov_path).resize((720, 1280)).set_opacity(OVERLAY_OPACITY)
             overlay_clips.append(ov)
 
-    main_clip = main_clip.fl_image(apply_hdr_and_color)
-    main_clip = main_clip.fl_image(add_white_line)
-    main_clip = main_clip.fl_image(add_watermark)
+    # Áp dụng HDR và thay đổi màu sắc
+    clip = clip.fl_image(apply_hdr_and_color)
 
-    final = CompositeVideoClip([
-        bg_clip.resize(FINAL_RES),
-        main_clip.set_position("center")
-    ] + overlay_clips, size=FINAL_RES)
+    # Lưu video đã chỉnh sửa
+    output_path = os.path.join(OUTPUT_FOLDER, "edited_video.mp4")
+    final_clip = CompositeVideoClip([bg_clip, clip.set_position("center")] + overlay_clips)
+    final_clip.write_videofile(output_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC)
+    return output_path
 
-    speed = random.uniform(0.90, 1.10)
-    final = final.fx(vfx.speedx, speed)
+# ==== PART 2 - Cắt Video Thành Các Phần Nhỏ ====
+def split_video(input_path):
+    clip = VideoFileClip(input_path)
+    video_duration = clip.duration
+    part_duration = random.randint(60, 75)  # Video part duration between 1m to 1m15s
 
-    if final.audio:
-        temp_audio_path = tempfile.mktemp(suffix=".wav")
-        final.audio.write_audiofile(temp_audio_path, fps=44100)
-        processed_audio_path = add_echo_and_pitch(temp_audio_path)
-        audio_clip = AudioFileClip(processed_audio_path).set_duration(final.duration)
-        final = final.set_audio(audio_clip)
+    num_parts = int(video_duration / part_duration)
+    parts = []
+    for i in range(num_parts):
+        start_time = i * part_duration
+        end_time = (i + 1) * part_duration if (i + 1) * part_duration <= video_duration else video_duration
 
-    temp_out = tempfile.mktemp(suffix=".mp4")
-    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+        part = clip.subclip(start_time, end_time)
 
-    random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
-    metadata_flags = (
-        f'-metadata title="Processed by NguenChang" '
-        f'-metadata author="NguenChang" '
-        f'-metadata comment="Edited on iPhone 12 Pro Max using {random_software}" '
-        f'-metadata location="USA" '
-    )
-    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{output_path}" -y')
+        # Thêm chữ EpX vào video
+        txt_clip = (TextClip(f"Ep{i+1}", fontsize=50, color='white')
+                    .set_position(('center', 'top'))
+                    .set_duration(part.duration))
+        part = CompositeVideoClip([part, txt_clip])
 
-def main():
-    videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
-    for i, vid in enumerate(videos):
-        in_path = os.path.join(INPUT_FOLDER, vid)
-        out_path = os.path.join(current_output_path, f"video_{i+1}.mp4")
-        process_video(in_path, out_path)
-    print(f"\n✅ Completed! Videos saved in: {current_output_path}")
+        parts.append(part)
 
-if __name__ == "__main__":
-    main()
+    return parts
+
+def process_and_split_video(input_path):
+    edited_video_path = edit_video(input_path)
+    parts = split_video(edited_video_path)
+
+    # Lưu từng phần video
+    part_paths = []
+    for i, part in enumerate(parts):
+        part_path = os.path.join(OUTPUT_FOLDER, f"part_{i+1}.mp4")
+        part.write_videofile(part_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC)
+        part_paths.append(part_path)
+
+    return part_paths
+
+# ==== GUI ====
+def run_processing():
+    try:
+        videos = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))]
+        if not videos:
+            messagebox.showinfo("Thông báo", "Không tìm thấy video trong thư mục input_videos")
+            return
+
+        for vid in videos:
+            in_path = os.path.join(INPUT_FOLDER, vid)
+            status_var.set(f"Đang xử lý: {vid}")
+            part_paths = process_and_split_video(in_path)
+
+        messagebox.showinfo("Hoàn thành", f"✅ Xử lý xong! Video nằm ở: {OUTPUT_FOLDER}")
+    except Exception as e:
+        messagebox.showerror("Lỗi", str(e))
+
+def start_thread():
+    threading.Thread(target=run_processing).start()
+
+# ==== GIAO DIỆN GUI ====
+root = tk.Tk()
+root.title("Video Tool - NguenChang")
+root.geometry("400x200")
+root.resizable(False, False)
+
+status_var = tk.StringVar()
+status_var.set("Sẵn sàng.")
+
+label = tk.Label(root, text="Tool xử lý video dạng Reels/TikTok", font=("Arial", 12))
+label.pack(pady=10)
+
+button = tk.Button(root, text="Bắt đầu xử lý", font=("Arial", 12), command=start_thread)
+button.pack(pady=10)
+
+status = tk.Label(root, textvariable=status_var, font=("Arial", 10))
+status.pack(pady=5)
+
+root.mainloop()
