@@ -14,12 +14,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-  shell: cmd
-  run: |
-    python -m pip install --upgrade pip
-    if exist requirements.txt pip install -r requirements.txt
-    pip install pyinstaller imageio-ffmpeg
-
+        run: |
+          python -m pip install --upgrade pip
+          if exist requirements.txt (
+            pip install -r requirements.txt
+          )
+          pip install pyinstaller imageio-ffmpeg
+        shell: cmd
 
       - name: Build EXE
         run: |
@@ -33,6 +34,7 @@ jobs:
             --collect-all imageio_ffmpeg ^
             --add-binary "ffmpeg.exe;." ^
             tool_video.py
+        shell: cmd
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
