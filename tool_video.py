@@ -26,6 +26,7 @@ WATERMARK_ALPHA = 0.3
 VIDEO_CODEC = "libx265"
 AUDIO_CODEC = "aac"
 FPS = 60
+EPSILON = 0.05  # tránh vượt quá duration gây lỗi
 
 if getattr(sys, 'frozen', False):
     os.environ["IMAGEIO_FFMPEG_EXE"] = os.path.join(sys._MEIPASS, "ffmpeg.exe")
@@ -82,9 +83,8 @@ def add_echo_and_pitch(audio_path):
 def save_segments(final_clip, output_path):
     segment_start = 0
     ep_index = 1
-    while segment_start < final_clip.duration:
-        segment_end = segment_start + random.uniform(60, 75)
-        segment_end = min(segment_end, final_clip.duration)
+    while segment_start < final_clip.duration - EPSILON:
+        segment_end = min(segment_start + random.uniform(60, 75), final_clip.duration - EPSILON)
         subclip = final_clip.subclip(segment_start, segment_end)
 
         text = TextClip(f"Ep{ep_index}", fontsize=30, color='white')
@@ -97,80 +97,71 @@ def save_segments(final_clip, output_path):
         ep_index += 1
 
 def process_video(input_path, output_path):
-    try:
-        clip = VideoFileClip(input_path)
-        w, h = clip.size
-        aspect = w / h
+    clip = VideoFileClip(input_path)
+    w, h = clip.size
+    aspect = w / h
 
-        if aspect >= 1.3:
-            resized = clip.resize(width=FINAL_RES[0])
-            w, h = resized.size
-            bg_clip = resized.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
-            x_center = w / 2
-            y_center = h / 2
-            crop_width = w * 0.87
-            crop_height = h * 0.87
-            scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=x_center, y_center=y_center)
-        else:
-            crop_w = w * 0.97
-            crop_h = h * 0.97
-            scaled_clip = clip.crop(width=crop_w, height=crop_h, x_center=w / 2, y_center=h / 2)
-            bg_clip = create_blurred_bg(scaled_clip)
+    if aspect >= 1.3:
+        resized = clip.resize(width=FINAL_RES[0])
+        w, h = resized.size
+        bg_clip = resized.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
+        crop_width = w * 0.87
+        crop_height = h * 0.87
+        scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=w / 2, y_center=h / 2)
+    else:
+        crop_w = w * 0.97
+        crop_h = h * 0.97
+        scaled_clip = clip.crop(width=crop_w, height=crop_h, x_center=w / 2, y_center=h / 2)
+        bg_clip = create_blurred_bg(scaled_clip)
 
-        main_clip = scaled_clip.resize(height=FINAL_RES[1])
+    main_clip = scaled_clip.resize(height=FINAL_RES[1])
 
-        overlay_clips = []
-        for file in OVERLAY_FILES:
-            ov_path = os.path.join(OVERLAY_FOLDER, file)
-            if os.path.exists(ov_path):
-                ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
-                if ov.duration < clip.duration:
-                    repeat = int(clip.duration / ov.duration) + 1
-                    ov = CompositeVideoClip([ov] * repeat).set_duration(clip.duration)
-                else:
-                    ov = ov.subclip(0, clip.duration)
-                overlay_clips.append(ov)
+    overlay_clips = []
+    for file in OVERLAY_FILES:
+        ov_path = os.path.join(OVERLAY_FOLDER, file)
+        if os.path.exists(ov_path):
+            ov = VideoFileClip(ov_path).resize(FINAL_RES).set_opacity(OVERLAY_OPACITY)
+            if ov.duration < clip.duration:
+                repeat = int(clip.duration / ov.duration) + 1
+                ov = CompositeVideoClip([ov] * repeat).set_duration(clip.duration)
+            else:
+                ov = ov.subclip(0, clip.duration - EPSILON)
+            overlay_clips.append(ov)
 
-        main_clip = main_clip.fl_image(apply_hdr_and_color)
-        main_clip = main_clip.fl_image(add_white_line)
-        main_clip = main_clip.fl_image(add_watermark)
+    main_clip = main_clip.fl_image(apply_hdr_and_color)
+    main_clip = main_clip.fl_image(add_white_line)
+    main_clip = main_clip.fl_image(add_watermark)
 
-        final = CompositeVideoClip([
-            bg_clip.resize(FINAL_RES),
-            main_clip.set_position("center")
-        ] + overlay_clips, size=FINAL_RES)
+    final = CompositeVideoClip([
+        bg_clip.resize(FINAL_RES),
+        main_clip.set_position("center")
+    ] + overlay_clips, size=FINAL_RES)
 
-        speed = random.uniform(0.90, 1.10)
-        final = final.fx(vfx.speedx, speed)
+    speed = random.uniform(0.90, 1.10)
+    final = final.fx(vfx.speedx, speed)
 
-        if final.audio:
-            temp_audio_path = tempfile.mktemp(suffix=".wav")
-            final.audio.write_audiofile(temp_audio_path, fps=44100)
-            processed_audio_path = add_echo_and_pitch(temp_audio_path)
-            audio_clip = AudioFileClip(processed_audio_path)
-            duration = final.duration
-            safe_duration = min(audio_clip.duration - 0.1, duration)
-            audio_clip = audio_clip.subclip(0, safe_duration)
-            final = final.set_audio(audio_clip.set_duration(duration))
+    if final.audio:
+        temp_audio_path = tempfile.mktemp(suffix=".wav")
+        final.audio.write_audiofile(temp_audio_path, fps=44100)
+        processed_audio_path = add_echo_and_pitch(temp_audio_path)
+        audio_clip = AudioFileClip(processed_audio_path)
+        duration = final.duration - EPSILON
+        audio_clip = audio_clip.subclip(0, min(audio_clip.duration, duration)).set_duration(duration)
+        final = final.set_audio(audio_clip)
 
-        temp_out = tempfile.mktemp(suffix=".mp4")
-        final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+    temp_out = tempfile.mktemp(suffix=".mp4")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-        random_software = random.choice(["CapCut", "iPhone Video Editor", "iMovie", "VN Video Editor"])
-        metadata_flags = (
-            f'-metadata title="Processed by NguenChang" '
-            f'-metadata author="NguenChang" '
-            f'-metadata comment="Edited on iPhone 12 Pro Max using {random_software}" '
-            f'-metadata location="USA" '
-        )
+    metadata_flags = (
+        f'-metadata title="Processed by NguenChang" '
+        f'-metadata author="NguenChang" '
+        f'-metadata comment="Edited on iPhone 12 Pro Max using CapCut" '
+        f'-metadata location="USA" '
+    )
 
-        final_out_path = os.path.join(output_path, "final_output.mp4")
-        os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
-        save_segments(VideoFileClip(final_out_path), output_path)
-
-    except Exception as e:
-        print(f"Lỗi khi xử lý video {input_path}: {e}")
-        status_var.set(f"Lỗi: {str(e)}")
+    final_out_path = os.path.join(output_path, "final_output.mp4")
+    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
+    save_segments(VideoFileClip(final_out_path), output_path)
 
 def run_processing():
     filepaths = filedialog.askopenfilenames(title="Chọn video để xử lý", filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv")])
