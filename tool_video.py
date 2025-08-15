@@ -68,15 +68,19 @@ def add_watermark(frame):
     cv2.putText(overlay, WATERMARK_TEXT, pos, WATERMARK_FONT, WATERMARK_SCALE, WATERMARK_COLOR, WATERMARK_THICKNESS)
     return cv2.addWeighted(overlay, WATERMARK_ALPHA, frame, 1 - WATERMARK_ALPHA, 0)
 
-def add_echo_and_pitch(audio_path):
+def add_echo_and_pitch(audio_path, max_duration):
     sound = AudioSegment.from_file(audio_path)
+    if sound.duration_seconds > max_duration:
+        sound = sound[:int(max_duration * 1000)]
     echo = sound - 6
     sound = sound.overlay(echo, position=80)
-    sound = sound._spawn(sound.raw_data, overrides={
+    pitched = sound._spawn(sound.raw_data, overrides={
         "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
     }).set_frame_rate(sound.frame_rate)
+    if pitched.duration_seconds > max_duration:
+        pitched = pitched[:int(max_duration * 1000)]
     temp_path = tempfile.mktemp(suffix=".wav")
-    sound.export(temp_path, format="wav")
+    pitched.export(temp_path, format="wav")
     return temp_path
 
 def save_segments(final_clip, output_path):
@@ -86,11 +90,9 @@ def save_segments(final_clip, output_path):
         segment_end = segment_start + random.uniform(60, 75)
         segment_end = min(segment_end, final_clip.duration)
         subclip = final_clip.subclip(segment_start, segment_end)
-
         text = TextClip(f"Ep{ep_index}", fontsize=30, color='white')
         text = text.set_position((10, 10)).set_duration(subclip.duration)
         subclip = CompositeVideoClip([subclip, text])
-
         temp_output = os.path.join(output_path, f"segment_{ep_index}.mp4")
         subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
         segment_start = segment_end
@@ -102,10 +104,8 @@ def process_video(input_path, output_path):
     aspect = w / h
 
     if aspect >= 1.3:
-        # Bước 1: thu nhỏ video cho vừa khung dọc 720x1280
         resized = clip.resize(width=FINAL_RES[0])
         w, h = resized.size
-        # Bước 2: scale thêm tạo nền mờ
         bg_clip = resized.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
         x_center = w / 2
         y_center = h / 2
@@ -147,7 +147,7 @@ def process_video(input_path, output_path):
     if final.audio:
         temp_audio_path = tempfile.mktemp(suffix=".wav")
         final.audio.write_audiofile(temp_audio_path, fps=44100)
-        processed_audio_path = add_echo_and_pitch(temp_audio_path)
+        processed_audio_path = add_echo_and_pitch(temp_audio_path, final.duration)
         audio_clip = AudioFileClip(processed_audio_path)
         duration = final.duration
         audio_clip = audio_clip.subclip(0, min(audio_clip.duration, duration)).set_duration(duration)
