@@ -1,15 +1,14 @@
 import os
 import sys
 import random
-import tempfile
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from moviepy.editor import VideoFileClip, CompositeVideoClip, TextClip, vfx
+from moviepy.editor import VideoFileClip
 
 # ==== CONFIG ====
 OUTPUT_FOLDER = "output"
-VIDEO_CODEC = "libx265"
+VIDEO_CODEC = "libx264"
 AUDIO_CODEC = "aac"
 FPS = 60
 
@@ -28,12 +27,18 @@ def save_segments(input_path, output_path):
         segment_end = min(segment_end, clip.duration)
         subclip = clip.subclip(segment_start, segment_end)
 
-        text = TextClip(f"Ep{ep_index}", fontsize=30, color='white')
-        text = text.set_position((10, 10)).set_duration(subclip.duration)
-        subclip = CompositeVideoClip([subclip, text])
-
         temp_output = os.path.join(output_path, f"segment_{ep_index}.mp4")
-        subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
+        subclip.write_videofile(
+            temp_output,
+            fps=FPS,
+            codec=VIDEO_CODEC,
+            audio_codec=AUDIO_CODEC,
+            preset="ultrafast",
+            threads=4,
+            bitrate="2000k",
+            verbose=False,
+            logger=None
+        )
         segment_start = segment_end
         ep_index += 1
 
