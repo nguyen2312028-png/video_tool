@@ -102,20 +102,23 @@ def process_video(input_path, output_path):
     aspect = w / h
 
     if aspect >= 1.3:
-        resized = clip.resize(height=FINAL_RES[1])
+        # Bước 1: thu nhỏ video cho vừa khung dọc 720x1280
+        resized = clip.resize(width=FINAL_RES[0])
         w, h = resized.size
+        # Bước 2: scale thêm tạo nền mờ
+        bg_clip = resized.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
         x_center = w / 2
         y_center = h / 2
         crop_width = w * 0.87
         crop_height = h * 0.87
         scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=x_center, y_center=y_center)
-        # Scale foreground 1.15x, 1.40x
-        main_clip = scaled_clip.resize(width=scaled_clip.w * ZOOM_X, height=scaled_clip.h * ZOOM_Y)
     else:
-        scaled_clip = clip.crop(width=w * 0.97, height=h * 0.97, x_center=w / 2, y_center=h / 2)
-        main_clip = scaled_clip
+        crop_w = w * 0.97
+        crop_h = h * 0.97
+        scaled_clip = clip.crop(width=crop_w, height=crop_h, x_center=w / 2, y_center=h / 2)
+        bg_clip = create_blurred_bg(scaled_clip)
 
-    bg_clip = create_blurred_bg(scaled_clip)
+    main_clip = scaled_clip.resize(height=FINAL_RES[1])
 
     overlay_clips = []
     for file in OVERLAY_FILES:
