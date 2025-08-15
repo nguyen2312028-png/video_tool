@@ -1,5 +1,5 @@
 """
-VIDEO TOOL - NguenChang (Gộp xử lý audio + video đồng thời)
+VIDEO TOOL - NguenChang (Gộp xử lý audio + video đồng thời, Fix lỗi kênh)
 -----------------------------------------------------------
 📜 TÍNH NĂNG:
 1. Đầu vào:
@@ -15,11 +15,12 @@ VIDEO TOOL - NguenChang (Gộp xử lý audio + video đồng thời)
    - Vẽ đường trắng ngang giữa video.
    - Chèn watermark ngẫu nhiên vào 1 trong 4 góc.
 
-3. Xử lý âm thanh (gộp trực tiếp, không xuất .wav tạm):
+3. Xử lý âm thanh (gộp trực tiếp, không xuất .wav tạm lâu dài):
    - Thêm echo nhẹ (80ms trễ).
    - Pitch shift ±3%.
    - Điều chỉnh âm lượng nhẹ.
    - Đồng bộ tuyệt đối với hình ảnh kể cả khi tăng tốc.
+   - Ép kênh stereo để tránh lỗi FFmpeg “Too many channels”.
 
 4. Hiệu ứng đồng bộ:
    - Tăng/giảm tốc ±10% (cả video và audio cùng lúc).
@@ -50,7 +51,7 @@ import random
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, TextClip, AudioClip
+from moviepy.editor import VideoFileClip, CompositeVideoClip, vfx, TextClip, AudioFileClip
 from pydub import AudioSegment
 import tempfile
 
@@ -116,21 +117,22 @@ def add_watermark(frame):
 
 # ==== AUDIO EFFECTS ====
 def pydub_effects_on_audio(audio_clip):
-    # Xuất tạm từ MoviePy để Pydub xử lý
+    # Xuất tạm từ MoviePy để PyDub xử lý
     temp_wav = tempfile.mktemp(suffix=".wav")
     audio_clip.write_audiofile(temp_wav, fps=44100, verbose=False, logger=None)
 
     sound = AudioSegment.from_file(temp_wav)
+    sound = sound.set_channels(2)  # Ép stereo để tránh lỗi Too many channels
     echo = sound - 6
     sound = sound.overlay(echo, position=80)
     sound = sound._spawn(sound.raw_data, overrides={
         "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
     }).set_frame_rate(sound.frame_rate)
 
-    # Lưu lại file tạm và nạp lại MoviePy AudioClip
+    # Lưu lại file tạm và nạp lại bằng AudioFileClip
     processed_wav = tempfile.mktemp(suffix=".wav")
     sound.export(processed_wav, format="wav")
-    return AudioClip(lambda t: AudioSegment.from_wav(processed_wav).get_array_of_samples(), duration=audio_clip.duration, fps=44100)
+    return AudioFileClip(processed_wav)
 
 # ==== SEGMENT CUT ====
 def save_segments(final_clip, output_path):
