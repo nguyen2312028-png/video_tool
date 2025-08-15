@@ -1,47 +1,4 @@
-"""
-VIDEO TOOL - NguenChang (Gộp xử lý audio + video đồng thời, Fix lỗi kênh)
------------------------------------------------------------
-📜 TÍNH NĂNG:
-1. Đầu vào:
-   - Chọn nhiều video (.mp4, .mov, .avi, .mkv) qua GUI.
-   - Tự tạo thư mục overlays và output nếu chưa có.
-
-2. Xử lý hình ảnh:
-   - Xuất ra tỷ lệ 9:16 (720x1280).
-   - Video ngang: Thu nhỏ + nền mờ (ZOOM_X, ZOOM_Y) + crop nhẹ.
-   - Video dọc: Crop nhẹ 3% + nền mờ.
-   - Overlay video line_sang, line_trang (lặp/cắt vừa độ dài).
-   - Nâng màu HDR giả lập.
-   - Vẽ đường trắng ngang giữa video.
-   - Chèn watermark ngẫu nhiên vào 1 trong 4 góc.
-
-3. Xử lý âm thanh (gộp trực tiếp, không xuất .wav tạm lâu dài):
-   - Thêm echo nhẹ (80ms trễ).
-   - Pitch shift ±3%.
-   - Điều chỉnh âm lượng nhẹ.
-   - Đồng bộ tuyệt đối với hình ảnh kể cả khi tăng tốc.
-   - Ép kênh stereo để tránh lỗi FFmpeg “Too many channels”.
-
-4. Hiệu ứng đồng bộ:
-   - Tăng/giảm tốc ±10% (cả video và audio cùng lúc).
-
-5. Xuất video:
-   - FPS: 60, codec: libx265, audio: AAC, bitrate 8000k.
-   - Metadata:
-       title="Processed by NguenChang"
-       author="NguenChang"
-       comment="Edited on iPhone 12 Pro Max using CapCut"
-       location="USA"
-
-6. Cắt thành các tập EpX:
-   - 60–75 giây (ngẫu nhiên), chèn chữ EpX góc trái.
-   - Lưu vào thư mục output.
-
-7. Giao diện:
-   - Tkinter GUI, nút chọn & xử lý video, trạng thái tiến trình.
-   - Đa luồng, không treo GUI.
------------------------------------------------------------
-"""
+# VIDEO TOOL - NguenChang (Gộp xử lý audio + video đồng thời, Fix 16:9)
 
 import os
 import sys
@@ -117,63 +74,51 @@ def add_watermark(frame):
 
 # ==== AUDIO EFFECTS ====
 def pydub_effects_on_audio(audio_clip):
-    # Xuất tạm từ MoviePy để PyDub xử lý
     temp_wav = tempfile.mktemp(suffix=".wav")
     audio_clip.write_audiofile(temp_wav, fps=44100, verbose=False, logger=None)
-
-    sound = AudioSegment.from_file(temp_wav)
-    sound = sound.set_channels(2)  # Ép stereo để tránh lỗi Too many channels
+    sound = AudioSegment.from_file(temp_wav).set_channels(2)
     echo = sound - 6
     sound = sound.overlay(echo, position=80)
     sound = sound._spawn(sound.raw_data, overrides={
         "frame_rate": int(sound.frame_rate * random.uniform(0.97, 1.03))
     }).set_frame_rate(sound.frame_rate)
-
-    # Lưu lại file tạm và nạp lại bằng AudioFileClip
     processed_wav = tempfile.mktemp(suffix=".wav")
     sound.export(processed_wav, format="wav")
     return AudioFileClip(processed_wav)
 
-# ==== SEGMENT CUT ====
+# ==== CUT ====
 def save_segments(final_clip, output_path):
     segment_start = 0
     ep_index = 1
     while segment_start < final_clip.duration - EPSILON:
         segment_end = min(segment_start + random.uniform(60, 75), final_clip.duration - EPSILON)
         subclip = final_clip.subclip(segment_start, segment_end)
-
         text = TextClip(f"Ep{ep_index}", fontsize=30, color='white')
         text = text.set_position((10, 10)).set_duration(subclip.duration)
         subclip = CompositeVideoClip([subclip, text])
-
-        temp_output = os.path.join(output_path, f"segment_{ep_index}.mp4")
-        subclip.write_videofile(temp_output, fps=FPS, codec=VIDEO_CODEC,
-                                audio_codec=AUDIO_CODEC, bitrate="8000k", verbose=False, logger=None)
+        out_path = os.path.join(output_path, f"segment_{ep_index}.mp4")
+        subclip.write_videofile(out_path, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k", verbose=False, logger=None)
         segment_start = segment_end
         ep_index += 1
 
-# ==== MAIN PROCESS ====
+# ==== MAIN ====
 def process_video(input_path, output_path):
     clip = VideoFileClip(input_path)
     w, h = clip.size
     aspect = w / h
 
     if aspect >= 1.3:
-        resized = clip.resize(width=FINAL_RES[0])
-        w, h = resized.size
-        bg_clip = resized.resize(width=w * ZOOM_X, height=h * ZOOM_Y)
-        crop_width = w * 0.87
-        crop_height = h * 0.87
-        scaled_clip = resized.crop(width=crop_width, height=crop_height, x_center=w/2, y_center=h/2)
+        # Resize chỉ chiều ngang về 720
+        main_clip = clip.resize(width=FINAL_RES[0])
+        main_clip = main_clip.set_position("center")
+        bg_clip = create_blurred_bg(main_clip)
     else:
         crop_w = w * 0.97
         crop_h = h * 0.97
         scaled_clip = clip.crop(width=crop_w, height=crop_h, x_center=w/2, y_center=h/2)
-        bg_clip = create_blurred_bg(scaled_clip)
+        main_clip = scaled_clip.resize(height=FINAL_RES[1])
+        bg_clip = create_blurred_bg(main_clip)
 
-    main_clip = scaled_clip.resize(height=FINAL_RES[1])
-
-    # Overlay
     overlay_clips = []
     for file in OVERLAY_FILES:
         ov_path = os.path.join(OVERLAY_FOLDER, file)
@@ -186,47 +131,32 @@ def process_video(input_path, output_path):
                 ov = ov.subclip(0, clip.duration - EPSILON)
             overlay_clips.append(ov)
 
-    # Video effects
     main_clip = main_clip.fl_image(apply_hdr_and_color)
     main_clip = main_clip.fl_image(add_white_line)
     main_clip = main_clip.fl_image(add_watermark)
 
-    final = CompositeVideoClip([bg_clip.resize(FINAL_RES), main_clip.set_position("center")] + overlay_clips,
-                               size=FINAL_RES)
+    final = CompositeVideoClip([bg_clip.resize(FINAL_RES), main_clip] + overlay_clips, size=FINAL_RES)
+    final = final.fx(vfx.speedx, random.uniform(0.90, 1.10))
 
-    # Speed change
-    speed = random.uniform(0.90, 1.10)
-    final = final.fx(vfx.speedx, speed)
-
-    # Audio effects (gộp)
     if final.audio:
-        audio_processed = pydub_effects_on_audio(final.audio)
-        final = final.set_audio(audio_processed)
+        final = final.set_audio(pydub_effects_on_audio(final.audio))
 
-    # Export
     temp_out = tempfile.mktemp(suffix=".mp4")
-    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC,
-                          audio_codec=AUDIO_CODEC, bitrate="8000k")
+    final.write_videofile(temp_out, fps=FPS, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, bitrate="8000k")
 
-    # Metadata
     metadata_flags = (
         f'-metadata title="Processed by NguenChang" '
         f'-metadata author="NguenChang" '
         f'-metadata comment="Edited on iPhone 12 Pro Max using CapCut" '
         f'-metadata location="USA" '
     )
-
     final_out_path = os.path.join(output_path, "final_output.mp4")
-    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} '
-              f'-c:v copy -c:a copy "{final_out_path}" -y')
-
-    # Cut EpX
+    os.system(f'ffmpeg -i "{temp_out}" -map_metadata -1 {metadata_flags} -c:v copy -c:a copy "{final_out_path}" -y')
     save_segments(VideoFileClip(final_out_path), output_path)
 
 # ==== GUI ====
 def run_processing():
-    filepaths = filedialog.askopenfilenames(title="Chọn video để xử lý",
-                                            filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv")])
+    filepaths = filedialog.askopenfilenames(title="Chọn video để xử lý", filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv")])
     if not filepaths:
         messagebox.showinfo("Thông báo", "Bạn chưa chọn video nào!")
         return
